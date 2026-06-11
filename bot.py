@@ -7,7 +7,7 @@ app = FastAPI()
 EVOLUTION_API = os.getenv("EVOLUTION_API_URL")
 API_KEY = os.getenv("EVOLUTION_API_KEY")
 INSTANCE = os.getenv("INSTANCE_NAME")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://172.31.14.109:11434")
 
 # Conversation history store (in-memory)
 conversation_history = {}
@@ -56,31 +56,38 @@ def get_ai_reply(number: str, user_message: str) -> str:
 
     conversation_history[number].append({
         "role": "user",
-        "parts": [{"text": user_message}]
+        "content": user_message
     })
 
     history = conversation_history[number][-10:]
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-
     payload = {
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_PROMPT}]
-        },
-        "contents": history
+        "model": "deepseek-r1:1.5b",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *history
+        ],
+        "stream": False
     }
 
-    response = requests.post(url, json=payload)
+    response = requests.post(
+        f"{OLLAMA_URL}/api/chat",
+        json=payload,
+        timeout=60
+    )
 
-    print(f"[DEBUG] Gemini status: {response.status_code}")
-    print(f"[DEBUG] Gemini response: {response.text[:300]}")
+    print(f"[DEBUG] Ollama status: {response.status_code}")
+    print(f"[DEBUG] Ollama response: {response.text[:300]}")
 
-    data = response.json()
-    reply = data["candidates"][0]["content"]["parts"][0]["text"]
+    reply = response.json()["message"]["content"]
+
+    # Remove <think>...</think> tags if present
+    import re
+    reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
 
     conversation_history[number].append({
-        "role": "model",
-        "parts": [{"text": reply}]
+        "role": "assistant",
+        "content": reply
     })
 
     return reply
