@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Request
 import requests
 import os
+import re
 
 app = FastAPI()
 
 EVOLUTION_API = os.getenv("EVOLUTION_API_URL")
 API_KEY = os.getenv("EVOLUTION_API_KEY")
 INSTANCE = os.getenv("INSTANCE_NAME")
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://172.31.14.109:11434")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://3.108.234.140:11434")
 
 # Conversation history store (in-memory)
 conversation_history = {}
@@ -62,7 +63,7 @@ def get_ai_reply(number: str, user_message: str) -> str:
     history = conversation_history[number][-10:]
 
     payload = {
-        "model": "deepseek-r1:1.5b",
+        "model": "deepseek-r1:7b",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             *history
@@ -73,7 +74,7 @@ def get_ai_reply(number: str, user_message: str) -> str:
     response = requests.post(
         f"{OLLAMA_URL}/api/chat",
         json=payload,
-        timeout=60
+        timeout=120
     )
 
     print(f"[DEBUG] Ollama status: {response.status_code}")
@@ -81,8 +82,7 @@ def get_ai_reply(number: str, user_message: str) -> str:
 
     reply = response.json()["message"]["content"]
 
-    # Remove <think>...</think> tags if present
-    import re
+    # Remove <think>...</think> tags
     reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
 
     conversation_history[number].append({
