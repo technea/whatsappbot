@@ -1,0 +1,143 @@
+from fastapi import FastAPI, Request
+import requests
+import os
+
+app = FastAPI()
+
+EVOLUTION_API = os.getenv("EVOLUTION_API_URL")
+API_KEY = os.getenv("EVOLUTION_API_KEY")
+INSTANCE = os.getenv("INSTANCE_NAME")
+GROK_API_KEY = os.getenv("GROK_API_KEY")
+
+# Conversation history store (in-memory)
+conversation_history = {}
+
+SYSTEM_PROMPT = """You are a smart and friendly WhatsApp assistant for an IT services company.
+You MUST always reply in English only, regardless of what language the customer uses.
+You help customers with queries related to the following services:
+
+1. Web & App Development
+   - Custom website development
+   - Mobile app development (Android & iOS)
+   - E-commerce solutions
+   - UI/UX design
+
+2. Networking & IT Support
+   - Network setup and configuration
+   - IT infrastructure support
+   - Troubleshooting & maintenance
+   - Remote IT support
+
+3. Software & Cloud Services
+   - Custom software development
+   - Cloud migration & hosting (AWS, Azure, Google Cloud)
+   - SaaS solutions
+   - Database management
+
+4. General IT Consulting
+   - Technology consulting
+   - Digital transformation
+   - IT project management
+   - Cybersecurity solutions
+
+Your behavior:
+- ALWAYS reply in English only, no exceptions
+- Be professional but friendly and conversational
+- Keep replies concise and suitable for WhatsApp (avoid very long responses)
+- If someone wants to book a service or get a quote, ask for their name, requirements, and contact info
+- If you don't know something specific (like exact pricing), say a team member will follow up
+- Use emojis occasionally to keep the conversation warm
+- Never make up prices or guarantees you can't keep"""
+
+
+def get_ai_reply(number: str, user_message: str) -> str:
+    if number not in conversation_history:
+        conversation_history[number] = []
+
+    conversation_history[number].append({
+        "role": "user",
+        "content": user_message
+    })
+
+    # Keep only last 10 messages
+    history = conversation_history[number][-10:]
+
+    headers = {
+        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "grok-3-latest",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *history
+        ],
+        "max_tokens": 500,
+        "temperature": 0.7
+    }
+
+    response = requests.post(
+        "https://api.x.ai/v1/chat/completions",
+        headers=headers,
+        json=payload
+    )
+
+    reply = response.json()["choices"][0]["message"]["content"]
+
+    conversation_history[number].append({
+        "role": "assistant",
+        "content": reply
+    })
+
+    return reply
+
+
+def send_message(number: str, text: str):
+    url = f"{EVOLUTION_API}/message/sendText/{INSTANCE}"
+    headers = {
+        "apikey": API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "number": number,
+        "text": text
+    }
+    requests.post(url, json=data, headers=headers)
+
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    payload = await request.json()
+
+    try:
+        message_data = payload["data"]["message"]
+
+        if "conversation" in message_data:
+            message = message_data["conversation"]
+        elif "extendedTextMessage" in message_data:
+            message = message_data["extendedTextMessage"]["text"]
+        else:
+            return {"ignored": True}
+
+        number = payload["data"]["key"]["remoteJid"].split("@")[0]
+
+        # Ignore messages sent by the bot itself
+        if payload["data"]["key"].get("fromMe", False):
+            return {"ignored": True}
+
+    except Exception as e:
+        return {"ignored": True}
+
+    try:
+        reply = get_ai_reply(number, message)
+    except Exception as e:
+        reply = "Sorry, I'm having trouble right now. Please try again in a moment. 🙏"
+
+    send_message(number, reply)
+    return {"status": "sent"}
+
+
+@app.get("/")
+def root():
+    return {"status": "IT Services WhatsApp Bot is running! 🚀"}
