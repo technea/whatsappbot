@@ -7,7 +7,7 @@ app = FastAPI()
 EVOLUTION_API = os.getenv("EVOLUTION_API_URL")
 API_KEY = os.getenv("EVOLUTION_API_KEY")
 INSTANCE = os.getenv("INSTANCE_NAME")
-GROK_API_KEY = os.getenv("GROK_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Conversation history store (in-memory)
 conversation_history = {}
@@ -56,38 +56,27 @@ def get_ai_reply(number: str, user_message: str) -> str:
 
     conversation_history[number].append({
         "role": "user",
-        "content": user_message
+        "parts": [{"text": user_message}]
     })
 
     # Keep only last 10 messages
     history = conversation_history[number][-10:]
 
-    headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
-        "model": "grok-3-latest",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *history
-        ],
-        "max_tokens": 500,
-        "temperature": 0.7
+        "system_instruction": {
+            "parts": [{"text": SYSTEM_PROMPT}]
+        },
+        "contents": history
     }
 
-    response = requests.post(
-        "https://api.x.ai/v1/chat/completions",
-        headers=headers,
-        json=payload
-    )
-
-    reply = response.json()["choices"][0]["message"]["content"]
+    response = requests.post(url, json=payload)
+    reply = response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
     conversation_history[number].append({
-        "role": "assistant",
-        "content": reply
+        "role": "model",
+        "parts": [{"text": reply}]
     })
 
     return reply
