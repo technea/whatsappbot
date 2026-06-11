@@ -7,7 +7,7 @@ app = FastAPI()
 EVOLUTION_API = os.getenv("EVOLUTION_API_URL")
 API_KEY = os.getenv("EVOLUTION_API_KEY")
 INSTANCE = os.getenv("INSTANCE_NAME")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 # Conversation history store (in-memory)
 conversation_history = {}
@@ -56,27 +56,40 @@ def get_ai_reply(number: str, user_message: str) -> str:
 
     conversation_history[number].append({
         "role": "user",
-        "parts": [{"text": user_message}]
+        "content": user_message
     })
 
-    # Keep only last 10 messages
     history = conversation_history[number][-10:]
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-
-    payload = {
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_PROMPT}]
-        },
-        "contents": history
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
     }
 
-    response = requests.post(url, json=payload)
-    reply = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            *history
+        ],
+        "max_tokens": 500,
+        "temperature": 0.7
+    }
+
+    response = requests.post(
+        "https://api.deepseek.com/chat/completions",
+        headers=headers,
+        json=payload
+    )
+
+    print(f"[DEBUG] DeepSeek status: {response.status_code}")
+    print(f"[DEBUG] DeepSeek response: {response.text[:300]}")
+
+    reply = response.json()["choices"][0]["message"]["content"]
 
     conversation_history[number].append({
-        "role": "model",
-        "parts": [{"text": reply}]
+        "role": "assistant",
+        "content": reply
     })
 
     return reply
@@ -111,16 +124,17 @@ async def webhook(request: Request):
 
         number = payload["data"]["key"]["remoteJid"].split("@")[0]
 
-        # Ignore messages sent by the bot itself
         if payload["data"]["key"].get("fromMe", False):
             return {"ignored": True}
 
     except Exception as e:
+        print(f"[ERROR] Parsing webhook: {e}")
         return {"ignored": True}
 
     try:
         reply = get_ai_reply(number, message)
     except Exception as e:
+        print(f"[ERROR] get_ai_reply failed: {e}")
         reply = "Sorry, I'm having trouble right now. Please try again in a moment. 🙏"
 
     send_message(number, reply)
