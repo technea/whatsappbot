@@ -8,11 +8,7 @@ app = FastAPI()
 EVOLUTION_API = os.getenv("EVOLUTION_API_URL")
 API_KEY = os.getenv("EVOLUTION_API_KEY")
 INSTANCE = os.getenv("INSTANCE_NAME")
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")
 
 # Conversation history store (in-memory)
 conversation_history = {}
@@ -55,124 +51,6 @@ Your behavior:
 - Never make up prices or guarantees you can't keep"""
 
 
-# ---------------------------
-# Provider functions
-# ---------------------------
-
-def try_gemini(history):
-    if not GEMINI_API_KEY:
-        raise Exception("No Gemini key")
-
-    gemini_history = []
-    for msg in history:
-        role = "model" if msg["role"] == "assistant" else "user"
-        gemini_history.append({"role": role, "parts": [{"text": msg["content"]}]})
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": gemini_history
-    }
-
-    response = requests.post(url, json=payload, timeout=30)
-    print(f"[DEBUG] Gemini status: {response.status_code}")
-
-    if response.status_code != 200:
-        raise Exception(f"Gemini failed: {response.text[:200]}")
-
-    data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
-
-
-def try_groq(history):
-    if not GROQ_API_KEY:
-        raise Exception("No Groq key")
-
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, *history],
-        "max_tokens": 500,
-        "temperature": 0.7
-    }
-
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers=headers, json=payload, timeout=30
-    )
-    print(f"[DEBUG] Groq status: {response.status_code}")
-
-    if response.status_code != 200:
-        raise Exception(f"Groq failed: {response.text[:200]}")
-
-    return response.json()["choices"][0]["message"]["content"]
-
-
-def try_openrouter(history):
-    if not OPENROUTER_API_KEY:
-        raise Exception("No OpenRouter key")
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "meta-llama/llama-3.1-8b-instruct:free",
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, *history],
-        "max_tokens": 500
-    }
-
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers, json=payload, timeout=30
-    )
-    print(f"[DEBUG] OpenRouter status: {response.status_code}")
-
-    if response.status_code != 200:
-        raise Exception(f"OpenRouter failed: {response.text[:200]}")
-
-    return response.json()["choices"][0]["message"]["content"]
-
-
-def try_deepseek(history):
-    if not DEEPSEEK_API_KEY:
-        raise Exception("No DeepSeek key")
-
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, *history],
-        "max_tokens": 500,
-        "temperature": 0.7
-    }
-
-    response = requests.post(
-        "https://api.deepseek.com/chat/completions",
-        headers=headers, json=payload, timeout=30
-    )
-    print(f"[DEBUG] DeepSeek status: {response.status_code}")
-
-    if response.status_code != 200:
-        raise Exception(f"DeepSeek failed: {response.text[:200]}")
-
-    return response.json()["choices"][0]["message"]["content"]
-
-
-# Order of providers to try (free ones first)
-PROVIDERS = [
-    ("Gemini", try_gemini),
-    ("Groq", try_groq),
-    ("OpenRouter", try_openrouter),
-    ("DeepSeek", try_deepseek),
-]
-
-
 def get_ai_reply(number: str, user_message: str) -> str:
     if number not in conversation_history:
         conversation_history[number] = []
@@ -184,21 +62,29 @@ def get_ai_reply(number: str, user_message: str) -> str:
 
     history = conversation_history[number][-10:]
 
-    reply = None
-    last_error = None
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT}, *history],
+        "max_tokens": 500,
+        "temperature": 0.7
+    }
 
-    for name, func in PROVIDERS:
-        try:
-            reply = func(history)
-            print(f"[INFO] Reply generated using {name}")
-            break
-        except Exception as e:
-            print(f"[WARN] {name} failed: {e}")
-            last_error = e
-            continue
+    response = requests.post(
+        "https://router.huggingface.co/v1/chat/completions",
+        headers=headers, json=payload, timeout=60
+    )
 
-    if reply is None:
-        raise Exception(f"All providers failed. Last error: {last_error}")
+    print(f"[DEBUG] HuggingFace status: {response.status_code}")
+    print(f"[DEBUG] HuggingFace response: {response.text[:300]}")
+
+    if response.status_code != 200:
+        raise Exception(f"HuggingFace failed: {response.text[:200]}")
+
+    reply = response.json()["choices"][0]["message"]["content"]
 
     # Remove <think>...</think> tags if any
     reply = re.sub(r'<think>.*?</think>', '', reply, flags=re.DOTALL).strip()
